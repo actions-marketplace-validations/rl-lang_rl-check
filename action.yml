@@ -8,12 +8,17 @@ branding:
 
 inputs:
   version:
-    description: 'RL version to use (e.g., v0.1.4, latest, nightly). Defaults to v0.1.4'
+    description: 'rl-cli version to install from crates.io (e.g. 0.1.4). Defaults to the latest published version.'
     required: false
-    default: 'v0.1.4'
+    default: ''
   file:
-    description: 'File to check (e.g., main.rl)'
-    required: true
+    description: 'File to check (e.g., main.rl). Ignored if folder is set.'
+    required: false
+    default: ''
+  folder:
+    description: 'Folder to check (e.g., nano/, cd/). Runs rl check on every .rl file directly inside it.'
+    required: false
+    default: ''
   args:
     description: 'Additional arguments to pass to rl check'
     required: false
@@ -26,71 +31,71 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    - name: Install RL binary
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache rl-cli install
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/bin
+        key: rl-cli-${{ runner.os }}-${{ inputs.version || 'latest' }}
+
+    - name: Install rl-cli
       shell: bash
       run: |
-        # Detect OS and architecture
-        OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-        ARCH=$(uname -m)
-        
-        # Map architecture
-        case $ARCH in
-          x86_64) ARCH="x86_64" ;;
-          aarch64|arm64) ARCH="aarch64" ;;
-          *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
-        esac
-        
-        # Map OS to target format
-        case $OS in
-          linux) TARGET_OS="unknown-linux-gnu" ;;
-          darwin) TARGET_OS="apple-darwin" ;;
-          windows|mingw*|msys*) TARGET_OS="pc-windows-msvc" ;;
-          *) echo "Unsupported OS: $OS"; exit 1 ;;
-        esac
-        
-        # Determine which version to download
-        VERSION="${{ inputs.version }}"
-        if [ "$VERSION" = "latest" ]; then
-          echo "Fetching latest RL version..."
-          VERSION=$(curl -s https://api.github.com/repos/rl-lang/rl-lang/releases/latest | grep -o '"tag_name": "[^"]*' | cut -d'"' -f4)
-          if [ -z "$VERSION" ]; then
-            echo "Failed to get latest version"
-            exit 1
-          fi
-          echo "Latest version: $VERSION"
-        elif [ "$VERSION" = "nightly" ]; then
-          echo "Using nightly release"
-          VERSION="nightly"
+        if command -v rl >/dev/null 2>&1; then
+          echo "Using cached rl-cli: $(rl --version)"
+        elif [ -n "${{ inputs.version }}" ]; then
+          cargo install rl-cli --version "${{ inputs.version }}" --locked
         else
-          echo "Using specified version: $VERSION"
+          cargo install rl-cli --locked
         fi
-        
-        # Set binary name
-        BINARY_NAME="rl"
-        if [[ "$TARGET_OS" == "pc-windows-msvc" ]]; then
-          BINARY_NAME="rl.exe"
-        fi
-        
-        # Construct download URL
-        DOWNLOAD_URL="https://github.com/rl-lang/rl-lang/releases/download/${VERSION}/${BINARY_NAME}"
-        
-        # Download binary
-        echo "Downloading RL from ${DOWNLOAD_URL}"
-        mkdir -p /usr/local/bin
-        curl -L -o /usr/local/bin/rl "${DOWNLOAD_URL}"
-        
-        # Make executable (not needed on Windows)
-        if [[ "$TARGET_OS" != "pc-windows-msvc" ]]; then
-          chmod +x /usr/local/bin/rl
-        fi
-        
-        # Verify installation
-        echo "✅ RL installed successfully!"
-        /usr/local/bin/rl --version 2>/dev/null || echo "⚠️  Version check failed but binary is installed"
+
+    - name: Verify RL install
+      shell: bash
+      run: rl --version
 
     - name: Run rl check
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: |
-        echo "Running: rl check ${{ inputs.file }} ${{ inputs.args }}"
-        /usr/local/bin/rl check "${{ inputs.file }}" ${{ inputs.args }}
+        FOLDER="${{ inputs.folder }}"
+        FILE="${{ inputs.file }}"
+
+        if [ -n "$FOLDER" ]; then
+          if [ ! -d "$FOLDER" ]; then
+            echo "::error::Folder not found: $FOLDER"
+            exit 1
+          fi
+
+          echo "Checking all .rl files in $FOLDER"
+          cd "$FOLDER"
+
+          FAIL=0
+          COUNT=0
+          for f in *.rl; do
+            [ -e "$f" ] || continue
+            COUNT=$((COUNT+1))
+            echo "::group::rl check $f"
+            if rl check "$f" ${{ inputs.args }}; then
+              echo "✅ $f"
+            else
+              echo "::error::rl check failed for $f"
+              FAIL=1
+            fi
+            echo "::endgroup::"
+          done
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::No .rl files found in $FOLDER"
+            exit 1
+          fi
+
+          exit $FAIL
+        elif [ -n "$FILE" ]; then
+          echo "Running: rl check $FILE ${{ inputs.args }}"
+          rl check "$FILE" ${{ inputs.args }}
+        else
+          echo "::error::Must set either 'file' or 'folder'"
+          exit 1
+        fi
