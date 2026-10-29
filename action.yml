@@ -8,9 +8,9 @@ branding:
 
 inputs:
   version:
-    description: 'rl-cli version to install from crates.io (e.g. 0.1.4). Defaults to the latest published version.'
+    description: 'RL version: latest, nightly, or vX.Y.Z (e.g. v2.3.0). Defaults to the latest stable release.'
     required: false
-    default: ''
+    default: 'latest'
   file:
     description: 'File to check (e.g., main.rl). Ignored if folder is set.'
     required: false
@@ -31,29 +31,11 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
-
-    - name: Cache rl-cli install
-      uses: actions/cache@v4
+    - name: Setup RL
+      uses: rl-lang/rl-setup@main
       with:
-        path: ~/.cargo/bin
-        key: rl-cli-${{ runner.os }}-${{ inputs.version || 'latest' }}
-
-    - name: Install rl-cli
-      shell: bash
-      run: |
-        if command -v rl >/dev/null 2>&1; then
-          echo "Using cached rl-cli: $(rl --version)"
-        elif [ -n "${{ inputs.version }}" ]; then
-          cargo install rl-cli --version "${{ inputs.version }}" --locked
-        else
-          cargo install rl-cli --locked
-        fi
-
-    - name: Verify RL install
-      shell: bash
-      run: rl --version
+        version: ${{ inputs.version }}
+        binaries: rl
 
     - name: Run rl check
       shell: bash
@@ -78,7 +60,7 @@ runs:
             COUNT=$((COUNT+1))
             echo "::group::rl check $f"
             if rl check "$f" ${{ inputs.args }}; then
-              echo "✅ $f"
+              echo "PASS $f"
             else
               echo "::error::rl check failed for $f"
               FAIL=1
